@@ -10,6 +10,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 import cs336_basics.Tokenizer.BPE_tokenizer as bpe
+import cs336_basics.Transform.Module as Mo
 
 def run_linear(
     d_in: int,
@@ -29,9 +30,9 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
-
+    Layer = Mo.Linear(d_in, d_out)
+    Layer.load_state_dict({"W": weights})
+    return Layer(in_features)
 
 def run_embedding(
     vocab_size: int,
