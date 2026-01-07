@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
-
+import torch.nn as nn
 import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
@@ -31,7 +31,7 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
     Linear_layer = Mo.Linear(d_in, d_out)
-    Linear_layer.load_state_dict({"W": weights})
+    Linear_layer.load_state_dict({"W": nn.Parameter(weights)})
     return Linear_layer(in_features)
 
 def run_embedding(
@@ -53,7 +53,7 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
     Embedding_layer = Mo.Embedding(vocab_size, d_model)
-    Embedding_layer.weight.data = weights
+    Embedding_layer.weight.data = nn.Parameter(weights)
     return Embedding_layer(token_ids)
 
 def run_swiglu(
@@ -380,8 +380,9 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
-
+    RMSNorm_layer = Mo.RMSNorm(d_model,eps)
+    RMSNorm_layer.G_matrix.data = nn.Parameter(weights)
+    return RMSNorm_layer(in_features)
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
     """Given a tensor of inputs, return the output of applying SiLU

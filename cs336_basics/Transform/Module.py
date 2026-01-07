@@ -1,11 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy
+import numpy as np
 import einops
 from jaxtyping import Bool, Float, Int
 
-
+"""
+    所有参数默认在cpu上运行?
+    需要检查
+"""
 class Linear(nn.Module):
     def __init__(self, 
         in_features: int, 
@@ -18,17 +21,20 @@ class Linear(nn.Module):
         std = (2.0/(in_features + out_features))**0.5
         nn.init.trunc_normal_(weight, mean = 0.0, std = std, a = -std, b = std)
         nn.init.trunc_normal_(weight)
+        # 初始化所有参数
         self.W = nn.Parameter(weight)
-
+        self.device = device
+        self.dtype = dtype
+    
     #  注:这里的tensor必须要大写!!!
     def forward(self, 
         x: torch.Tensor,
     ) -> torch.Tensor:
        ## einops好像要慢许多
        # return einops.einsum(x, self.W, "... d_in, d_out d_in -> ... d_out")
+       # x  = x.to(device=self.device,dtype=self.dtype)
        return x @ self.W.T
 
-nn.Embedding
 class Embedding(nn.Module):
     def __init__(self, 
         num_embeddings: int, 
@@ -47,8 +53,44 @@ class Embedding(nn.Module):
         std = (2.0/(num_embeddings + embedding_dim))**0.5
         nn.init.trunc_normal_(weights, mean = 0.0, std = std, a = -std, b = std)
         # 嵌入矩阵的每一行就是一个词的嵌入向量, 比如一个词有64维向量, 嵌入矩阵取一行就是某个词的64维向量
-        self.weight = nn.Parameter(weights)
+        # self.weight = nn.Parameter(weights)
+        self.weight = weights
+        self.device = device
+        self.dtype = dtype
+
     def forward(self, 
         token_ids: torch.Tensor
     ) -> torch.Tensor:
+        # token_ids = token_ids.to(device = self.device, dtype = self.dtype)
         return self.weight[token_ids]
+    
+class RMSNorm(nn.Module):
+    def __init__(self,
+        d_model: int,
+        eps: float = 1e-5,
+        device: torch.device = None, 
+        dtype: torch.device = None             
+    ):
+        super(RMSNorm,self).__init__()
+        self.d_model = d_model
+        self.eps = eps
+        self.G_matrix = nn.Parameter(torch.randn(d_model,device=device,dtype=dtype))
+
+    def forward(self, 
+        x: torch.Tensor
+    ) -> torch.Tensor:
+        """
+            Process an input tensor of shape (batch_size, sequence_length, d_model) 
+            and return a tensor of the same shape.
+        """
+
+        # upcast your input to torch.float32 to prevent overflow when you square the input
+        _in_dtype = x.dtype
+        x = x.to(torch.float32)
+
+        # perform rms
+        rms = torch.sqrt(self.eps + torch.mean(x**2, dim = -1, keepdim = True)) # keepdim的意思是保持维度, 否则x的维度会减少, rms的维度是(batch_size, sequence_length, 1)
+        result = x / rms * self.G_matrix # 计算方式：x/rms表示让x的第三维每个元素都除以对应的rms值, 然后再乘以G_matrix
+
+        # Return the result in the original dtype
+        return result.to(_in_dtype)
