@@ -85,7 +85,12 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    SwiGLu_layer = Mo.SwiGLU(d_model, d_ff)
+    # 因为 Linear 层的权重参数名是 W，所以要用 .w1.W.data
+    SwiGLu_layer.w1.W.data = w1_weight
+    SwiGLu_layer.w2.W.data = w2_weight
+    SwiGLu_layer.w3.W.data = w3_weight
+    return SwiGLu_layer(in_features)
 
 
 def run_scaled_dot_product_attention(

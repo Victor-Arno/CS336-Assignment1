@@ -16,7 +16,7 @@ class Linear(nn.Module):
         device: torch.device = None, 
         dtype: torch.dtype = None,
     ):
-        super(Linear,self).__init__()
+        super().__init__()
         weight = torch.empty((out_features, in_features), device=device, dtype=dtype)
         std = (2.0/(in_features + out_features))**0.5
         nn.init.trunc_normal_(weight, mean = 0.0, std = std, a = -std, b = std)
@@ -30,9 +30,15 @@ class Linear(nn.Module):
     def forward(self, 
         x: torch.Tensor,
     ) -> torch.Tensor:
+       """
+            pyTorch 自动处理运算
+            当你执行 x @ self.W.T 时：
+            如果 x 和 self.W 在同一设备上，运算自动在该设备进行
+            输出张量会自动继承输入的 device/dtype
+       """
        ## einops好像要慢许多
        # return einops.einsum(x, self.W, "... d_in, d_out d_in -> ... d_out")
-       # x  = x.to(device=self.device,dtype=self.dtype)
+
        return x @ self.W.T
 
 class Embedding(nn.Module):
@@ -48,7 +54,7 @@ class Embedding(nn.Module):
             device: torch.device | None = None Device to store the parameters on
             dtype: torch.dtype | None = None Data type of the parameters
         """
-        super(Embedding,self).__init__()
+        super().__init__()
         weights = torch.empty(num_embeddings,embedding_dim,device=device,dtype=dtype)
         std = (2.0/(num_embeddings + embedding_dim))**0.5
         nn.init.trunc_normal_(weights, mean = 0.0, std = std, a = -std, b = std)
@@ -71,7 +77,7 @@ class RMSNorm(nn.Module):
         device: torch.device = None, 
         dtype: torch.device = None             
     ):
-        super(RMSNorm,self).__init__()
+        super().__init__()
         self.d_model = d_model
         self.eps = eps
         self.G_matrix = nn.Parameter(torch.randn(d_model,device=device,dtype=dtype))
@@ -94,3 +100,49 @@ class RMSNorm(nn.Module):
 
         # Return the result in the original dtype
         return result.to(_in_dtype)
+    
+class SiLU(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self,
+        x: Float[torch.Tensor, " ..."]
+    ) -> Float[torch.Tensor, " ..."]:
+        return x * torch.sigmoid(x)
+        
+class SwiGLU(nn.Module):
+    def __init__(self,
+        d_model: int,
+        d_ff: int,
+        device: torch.device = None,
+        dtype: torch.dtype = None
+    ):
+        """
+        SwiGLU feed-forward network.
+        SwiGLU(x) = W2 * (SiLU(W1 * x) ⊙ W3 * x)
+
+        Args:
+            d_model: Input/output dimension
+            d_ff: Hidden dimension
+            device: Device to store parameters
+            dtype: Data type of parameters
+        """
+        super().__init__()
+        self.d_model = d_model
+        self.d_ff = d_ff
+        # W1: d_model -> d_ff (gate branch)
+        self.w1 = Linear(in_features=d_model, out_features=d_ff, device=device, dtype=dtype)
+        # W3: d_model -> d_ff (value branch)
+        self.w3 = Linear(in_features=d_model, out_features=d_ff, device=device, dtype=dtype)
+        # W2: d_ff -> d_model (output projection)
+        self.w2 = Linear(in_features=d_ff, out_features=d_model, device=device, dtype=dtype)
+
+    def forward(self,
+        x: Float[torch.Tensor, " ... d_model"]
+    ) -> Float[torch.Tensor, " ... d_model"]:
+        """
+            SwiGLU(x) = W2 * (SiLU(W1 * x) ⊙ W3 * x)
+        """
+        
+        silu = SiLU()
+        return self.w2(silu(self.w1(x)) * self.w3(x))
