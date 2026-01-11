@@ -146,3 +146,59 @@ class SwiGLU(nn.Module):
         
         silu = SiLU()
         return self.w2(silu(self.w1(x)) * self.w3(x))
+    
+class RotaryPositionalEmbedding(nn.Module):
+    def __init__(self,
+        theta: float,
+        d_k: int,
+        max_seq_len: int,
+        device: torch.device = None
+    ):
+        super().__init__()    
+        fre = 1 / (theta ** (torch.arange(0, d_k, 2) / d_k))    # shape (d_k//2,)
+        pos = torch.arange(max_seq_len)                          # shape (max_seq_len,)
+        angle_matrix = torch.outer(pos, fre)                     # shape (max_seq_len, d_k//2)
+        self.register_buffer("cos_cache", torch.cos(angle_matrix), persistent = False) 
+        self.register_buffer("sin_cache", torch.sin(angle_matrix), persistent = False) 
+    
+    def forward(self,
+        x: torch.Tensor,
+        token_positions: torch.Tensor
+    ) -> torch.Tensor:
+        """
+            注：貌似不能用大模型常用的前后分割
+            __init__:
+            fre:          (d_k//2,)                    例: (4,)
+            pos:          (max_seq_len,)               例: (5,)
+            angle_matrix: (max_seq_len, d_k//2)        例: (5, 4)
+            cos_cache:    (max_seq_len, d_k//2)        例: (5, 4)
+            sin_cache:    (max_seq_len, d_k//2)        例: (5, 4)
+
+            forward:
+            输入 x:           (batch, seq_len, d_k)    例: (2, 3, 8)
+            token_positions:  (batch, seq_len)         例: (2, 3)
+            
+            x_even:           (batch, seq_len, d_k//2) 例: (2, 3, 4)
+            x_odd:            (batch, seq_len, d_k//2) 例: (2, 3, 4)
+            cos:              (batch, seq_len, d_k//2) 例: (2, 3, 4)
+            sin:              (batch, seq_len, d_k//2) 例: (2, 3, 4)
+            x_even_rotate:    (batch, seq_len, d_k//2) 例: (2, 3, 4)
+            x_odd_rotate:     (batch, seq_len, d_k//2) 例: (2, 3, 4)
+            stack 后:         (batch, seq_len, d_k//2, 2) 例: (2, 3, 4, 2)
+            输出 result:      (batch, seq_len, d_k)    例: (2, 3, 8)
+        """
+        # 奇偶交错分割: pairs are (x0,x1), (x2,x3), (x4,x5), ...
+        x_even = x[..., 0::2]  # 取索引 0, 2, 4, ... 形状 (..., seq_len, d_k//2)
+        x_odd = x[..., 1::2]   # 取索引 1, 3, 5, ... 形状 (..., seq_len, d_k//2)
+
+        cos = self.cos_cache[token_positions]   # 形状为 (..., seq_len, d_k//2)
+        sin = self.sin_cache[token_positions]   # 形状为 (..., seq_len, d_k//2)
+
+        # 旋转公式
+        x_even_rotate = x_even * cos - x_odd * sin
+        x_odd_rotate = x_even * sin + x_odd * cos
+
+        # 交错合并回去: [e0, o0, e1, o1, e2, o2, ...]
+        result = torch.stack([x_even_rotate, x_odd_rotate], dim=-1)  # (..., seq_len, d_k//2, 2)
+        result = result.flatten(-2)  # (..., seq_len, d_k)
+        return result
