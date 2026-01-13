@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 import einops
 from jaxtyping import Bool, Float, Int
+import math
+from . import function as F
 
 """
     所有参数默认在cpu上运行?
@@ -100,15 +101,6 @@ class RMSNorm(nn.Module):
 
         # Return the result in the original dtype
         return result.to(_in_dtype)
-    
-class SiLU(nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-    def forward(self,
-        x: Float[torch.Tensor, " ..."]
-    ) -> Float[torch.Tensor, " ..."]:
-        return x * torch.sigmoid(x)
         
 class SwiGLU(nn.Module):
     def __init__(self,
@@ -144,8 +136,7 @@ class SwiGLU(nn.Module):
             SwiGLU(x) = W2 * (SiLU(W1 * x) ⊙ W3 * x)
         """
         
-        silu = SiLU()
-        return self.w2(silu(self.w1(x)) * self.w3(x))
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
     
 class RotaryPositionalEmbedding(nn.Module):
     def __init__(self,
@@ -166,7 +157,7 @@ class RotaryPositionalEmbedding(nn.Module):
         token_positions: torch.Tensor
     ) -> torch.Tensor:
         """
-            注：貌似不能用大模型常用的前后分割
+            注：貌似这里不能用大模型常用的前后分割
             __init__:
             fre:          (d_k//2,)                    例: (4,)
             pos:          (max_seq_len,)               例: (5,)
@@ -202,3 +193,65 @@ class RotaryPositionalEmbedding(nn.Module):
         result = torch.stack([x_even_rotate, x_odd_rotate], dim=-1)  # (..., seq_len, d_k//2, 2)
         result = result.flatten(-2)  # (..., seq_len, d_k)
         return result
+    
+class multihead_self_attention(nn.Module):
+    def __init__(self,
+        d_model: int,
+        num_heads: int,
+        max_seq_len: int = None,
+        theta: float = None,
+        device: torch.device = None,
+        dtype: torch.dtype = None
+    ):
+        """
+            adapters.py 中
+            q_proj_weight: Float[Tensor, " d_k d_in"]  # d_k = num_heads * d_k_per_head
+            这里的 d_k 其实是 所有头的总维度，即 num_heads * (d_model // num_heads) = d_model。
+            d_k = d_model(所有头合在一起)
+            d_in = d_model
+
+            为什么写 d_k 而不是 d_model?
+            adapters.py 的命名是从概念角度来写的：
+                q_proj_weight 投影到 Query 空间，输出是"所有头的 Q"
+                形状 (d_k, d_in) 表示：输出 d_k 维，输入 d_in 维
+        """
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        self.d_v = d_model // num_heads
+        self.W_Q = Linear(d_model, d_model, device, dtype)
+        self.W_K = Linear(d_model, d_model, device, dtype)
+        self.W_V = Linear(d_model, d_model, device, dtype)
+        self.W_O = Linear(d_model, d_model, device, dtype)
+        if theta is not None and max_seq_len is not None:
+            self.rope = RotaryPositionalEmbedding(theta, self.d_k, max_seq_len)
+        else:
+            self.rope = None
+
+    def forward(self,
+        in_features: torch.Tensor,
+        token_positions: torch.Tensor = None  # 可选
+    ) -> torch.Tensor:
+        # 1. 线性变换
+        Q = self.W_Q(in_features)
+        K = self.W_K(in_features)
+        V = self.W_V(in_features)
+        # 2. 拆分成多头注意力
+        Q = einops.rearrange(Q,"b s (h d) -> b h s d",h = self.num_heads)
+        K = einops.rearrange(K,"b s (h d) -> b h s d",h = self.num_heads)
+        V = einops.rearrange(V,"b s (h d) -> b h s d",h = self.num_heads)
+        # 3. 应用rope, 如果存在
+        if self.rope is not None:
+            Q = self.rope(Q,token_positions)
+            K = self.rope(K,token_positions)
+        # 4. 生成因果编码
+        seq_len = in_features.size(-2)
+        mask = torch.tril(torch.ones(seq_len,seq_len)).bool()
+        # 调用scaled_dot_product_attention
+        output = F.scaled_dot_product_attention(Q,K,V,mask)
+        # 合并多头
+        output = einops.rearrange(output,"b h s d -> b s (h d)")
+        # 经过W_O线性层
+        output = self.W_O(output)
+        return output

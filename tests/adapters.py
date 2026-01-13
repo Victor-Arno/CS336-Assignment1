@@ -11,6 +11,7 @@ from torch import Tensor
 
 import cs336_basics.Tokenizer.BPE_tokenizer as bpe
 import cs336_basics.Transform.Module as Mo
+import cs336_basics.Transform.function as F
 
 def run_linear(
     d_in: int,
@@ -86,7 +87,7 @@ def run_swiglu(
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
     SwiGLu_layer = Mo.SwiGLU(d_model, d_ff)
-    # 因为 Linear 层的权重参数名是 W，所以要用 .w1.W.data
+    # 因为 Linear 层的权重参数名是 W, 所以要用 .w1.W.data
     SwiGLu_layer.w1.W.data = w1_weight
     SwiGLu_layer.w2.W.data = w2_weight
     SwiGLu_layer.w3.W.data = w3_weight
@@ -111,7 +112,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return F.scaled_dot_product_attention(Q,K,V,mask)
 
 
 def run_multihead_self_attention(
@@ -145,7 +146,13 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    Mha = Mo.multihead_self_attention(d_model,num_heads)
+    Mha.W_Q.W.data = q_proj_weight
+    Mha.W_K.W.data = k_proj_weight
+    Mha.W_V.W.data = v_proj_weight
+    Mha.W_O.W.data = o_proj_weight
+    return Mha(in_features)
+    
 
 
 def run_multihead_self_attention_with_rope(
@@ -185,7 +192,12 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    MHA_rope = Mo.multihead_self_attention(d_model,num_heads,max_seq_len,theta)
+    MHA_rope.W_Q.W.data = q_proj_weight
+    MHA_rope.W_K.W.data = k_proj_weight
+    MHA_rope.W_V.W.data = v_proj_weight
+    MHA_rope.W_O.W.data = o_proj_weight
+    return MHA_rope(in_features,token_positions)
 
 
 def run_rope(
@@ -440,7 +452,8 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    result = F.softmax(in_features,dim)
+    return result
 
 
 def run_cross_entropy(
