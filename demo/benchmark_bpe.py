@@ -1,10 +1,14 @@
 """BPE Training Performance Comparison: Linear vs Heap Optimization"""
+import sys
 import time
 from pathlib import Path
 
+# Add parent directory to path to import cs336_basics
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from cs336_basics.Tokenizer.BPE_tokenizer import BPETrainerLinear, BPETrainerHeap
 
-FIXTURES_PATH = Path("tests/fixtures")
+FIXTURES_PATH = Path(__file__).parent.parent / "tests" / "fixtures"
 
 
 def benchmark():

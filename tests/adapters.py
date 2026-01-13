@@ -31,8 +31,10 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-    Linear_layer = Mo.Linear(d_in, d_out)
-    Linear_layer.load_state_dict({"W": nn.Parameter(weights)})
+    device = in_features.device
+    dtype = in_features.dtype
+    Linear_layer = Mo.Linear(d_in, d_out, device=device, dtype=dtype)
+    Linear_layer.W.data = weights
     return Linear_layer(in_features)
 
 def run_embedding(
@@ -53,8 +55,10 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-    Embedding_layer = Mo.Embedding(vocab_size, d_model)
-    Embedding_layer.weight.data = nn.Parameter(weights)
+    device = weights.device
+    dtype = weights.dtype
+    Embedding_layer = Mo.Embedding(vocab_size, d_model, device=device, dtype=dtype)
+    Embedding_layer.weight.data = weights
     return Embedding_layer(token_ids)
 
 def run_swiglu(
@@ -79,15 +83,9 @@ def run_swiglu(
     Returns:
         Float[Tensor, "... d_model"]: Output embeddings of the same shape as the input embeddings.
     """
-    # Example:
-    # If your state dict keys match, you can use `load_state_dict()`
-    # swiglu.load_state_dict(weights)
-    # You can also manually assign the weights
-    # swiglu.w1.weight.data = w1_weight
-    # swiglu.w2.weight.data = w2_weight
-    # swiglu.w3.weight.data = w3_weight
-    SwiGLu_layer = Mo.SwiGLU(d_model, d_ff)
-    # 因为 Linear 层的权重参数名是 W, 所以要用 .w1.W.data
+    device = in_features.device
+    dtype = in_features.dtype
+    SwiGLu_layer = Mo.SwiGLU(d_model, d_ff, device=device, dtype=dtype)
     SwiGLu_layer.w1.W.data = w1_weight
     SwiGLu_layer.w2.W.data = w2_weight
     SwiGLu_layer.w3.W.data = w3_weight
@@ -146,7 +144,9 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    Mha = Mo.multihead_self_attention(d_model,num_heads)
+    device = in_features.device
+    dtype = in_features.dtype
+    Mha = Mo.MultiHeadSelfAttention(d_model, num_heads, device=device, dtype=dtype)
     Mha.W_Q.W.data = q_proj_weight
     Mha.W_K.W.data = k_proj_weight
     Mha.W_V.W.data = v_proj_weight
@@ -192,12 +192,14 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    MHA_rope = Mo.multihead_self_attention(d_model,num_heads,max_seq_len,theta)
+    device = in_features.device
+    dtype = in_features.dtype
+    MHA_rope = Mo.MultiHeadSelfAttention(d_model, num_heads, max_seq_len, theta, device=device, dtype=dtype)
     MHA_rope.W_Q.W.data = q_proj_weight
     MHA_rope.W_K.W.data = k_proj_weight
     MHA_rope.W_V.W.data = v_proj_weight
     MHA_rope.W_O.W.data = o_proj_weight
-    return MHA_rope(in_features,token_positions)
+    return MHA_rope(in_features, token_positions)
 
 
 def run_rope(
@@ -293,7 +295,32 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    device = in_features.device
+    dtype = in_features.dtype
+    TransBlock = Mo.TransformerBlock(
+        d_model = d_model,
+        num_heads = num_heads,
+        d_ff = d_ff,
+        theta = theta,
+        max_seq_len = max_seq_len,
+        device = device,
+        dtype = dtype
+    )
+    # 加载两个norm的G_matrix
+    TransBlock.norm1.G_matrix.data = weights['ln1.weight']
+    TransBlock.norm2.G_matrix.data = weights['ln2.weight']
+    # 加载MHA的参数q,k,v,o
+    TransBlock.MHA.W_Q.W.data = weights['attn.q_proj.weight']
+    TransBlock.MHA.W_K.W.data = weights['attn.k_proj.weight']
+    TransBlock.MHA.W_V.W.data = weights['attn.v_proj.weight']
+    TransBlock.MHA.W_O.W.data = weights['attn.output_proj.weight']
+    # 加载ffn(SwiGLU)的参数
+    TransBlock.ffn.w1.W.data = weights['ffn.w1.weight']
+    TransBlock.ffn.w2.W.data = weights['ffn.w2.weight']
+    TransBlock.ffn.w3.W.data = weights['ffn.w3.weight']
+
+    return TransBlock(in_features)
+    
 
 
 def run_transformer_lm(
@@ -375,8 +402,45 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    device = in_indices.device
+    dtype = weights['token_embeddings.weight'].dtype  
+    Model = Mo.Transformer(
+        vocab_size = vocab_size,
+        context_length = context_length,
+        d_model = d_model,
+        num_layers = num_layers,
+        num_heads = num_heads,
+        d_ff = d_ff,
+        rope_theta = rope_theta, 
+        device = device,
+        dtype = dtype
+    )
 
+    # 加载embedding词嵌入矩阵权重
+    Model.Embedding_layer.weight.data = weights['token_embeddings.weight']
+    
+    # 加载每一个block里的权重
+    for i in range(num_layers):
+        # 加载两个norm的G_matrix
+        Model.Blocks[i].norm1.G_matrix.data = weights[f'layers.{i}.ln1.weight']
+        Model.Blocks[i].norm2.G_matrix.data = weights[f'layers.{i}.ln2.weight']
+        # 加载MHA的参数q,k,v,o
+        Model.Blocks[i].MHA.W_Q.W.data = weights[f'layers.{i}.attn.q_proj.weight']
+        Model.Blocks[i].MHA.W_K.W.data = weights[f'layers.{i}.attn.k_proj.weight']
+        Model.Blocks[i].MHA.W_V.W.data = weights[f'layers.{i}.attn.v_proj.weight']
+        Model.Blocks[i].MHA.W_O.W.data = weights[f'layers.{i}.attn.output_proj.weight']
+        # 加载ffn(SwiGLU)的参数
+        Model.Blocks[i].ffn.w1.W.data = weights[f'layers.{i}.ffn.w1.weight']
+        Model.Blocks[i].ffn.w2.W.data = weights[f'layers.{i}.ffn.w2.weight']
+        Model.Blocks[i].ffn.w3.W.data = weights[f'layers.{i}.ffn.w3.weight']
+
+    # 加载last_norm权重
+    Model.last_norm.G_matrix.data = weights['ln_final.weight']
+    # 加载last_linear权重
+    Model.last_linear.W.data = weights['lm_head.weight']
+    # 输出vocab表概率分布
+    result = Model(in_indices)
+    return result
 
 def run_rmsnorm(
     d_model: int,
