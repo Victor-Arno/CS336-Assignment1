@@ -42,3 +42,14 @@ def scaled_dot_product_attention(
     # 5. 注意力输出
     result = Att @ V
     return result
+
+def CrossEntropy(logits, targets):
+    # 1.数值稳定, 减去最大值
+    logits_stable = logits - logits.max(dim=-1, keepdim=True).values
+    # 2.计算logsumexp
+    logsumexp = torch.logsumexp(logits_stable,dim=-1)
+    # 3.取出target位置的logit
+    target_logits = torch.gather(logits_stable, dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
+    # 4.计算loss并且返回平均值
+    loss = -target_logits + logsumexp
+    return loss.mean()

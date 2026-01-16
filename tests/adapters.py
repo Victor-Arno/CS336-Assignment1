@@ -12,6 +12,7 @@ from torch import Tensor
 import cs336_basics.Tokenizer.BPE_tokenizer as bpe
 import cs336_basics.Transform.Module as Mo
 import cs336_basics.Transform.function as F
+import cs336_basics.Transform.optimizer as op
 
 def run_linear(
     d_in: int,
@@ -535,8 +536,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
-
+    return F.CrossEntropy(inputs, targets)
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
     """Given a set of parameters, clip their combined gradients to have l2 norm at most max_l2_norm.
@@ -554,7 +554,8 @@ def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    # 函数要求返回类(class),不是实例(instance)
+    return op.AdamW
 
 
 def run_get_lr_cosine_schedule(
