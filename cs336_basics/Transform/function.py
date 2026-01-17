@@ -53,3 +53,93 @@ def CrossEntropy(logits, targets):
     # 4.计算loss并且返回平均值
     loss = -target_logits + logsumexp
     return loss.mean()
+
+def lr_cos_scheduler(
+    t,
+    a_max,
+    a_min,
+    T_w,
+    T_c
+):
+    if t < T_w:
+        a_t = t * a_max / T_w
+    elif t > T_c:
+        a_t = a_min
+    else:
+        a_t = a_min + 0.5 * (a_max - a_min) * (1 + math.cos(math.pi * ((t-T_w)/(T_c-T_w))))
+
+    return a_t     
+
+def gradient_clipping(
+    params,
+    max_l2_norm,
+    eps = 1e-6
+):
+    
+    total_norm = 0.0
+    for p in params:
+        if p.grad is not None:
+            para_norm = p.grad.data.norm(2)
+            total_norm += para_norm ** 2
+    total_norm = total_norm ** 0.5
+    clip_coef = max_l2_norm / (total_norm + eps)
+    # 若需要裁剪,则裁剪所有梯度
+    if total_norm >= max_l2_norm:
+        for p in params:
+            if p.grad is not None:
+                p.grad.data.mul_(clip_coef)
+    return True
+
+def get_batch(
+        x:  np.ndarray,
+        batch_size: int,
+        context_length: int,
+        device: str
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # 1. 随机采样位置
+    n = len(x)
+    # 生成batch_size个随机位置,范围是(0,n-context__length)
+    start_indices = np.random.randint(0, n - context_length, size=batch_size)
+
+    # 2. 提取输入
+    inputs = []
+    for i in start_indices:
+        inputs.append(x[i:i+context_length])
+    inputs = np.array(inputs) 
+    inputs = torch.from_numpy(inputs).to(device=device,dtype=torch.long)
+    
+    # 3. 获取targets
+    targets = []
+    for i in start_indices:
+        targets.append(x[i+1:i+1+context_length])
+    targets = np.array(targets)
+    targets = torch.from_numpy(targets).to(device=device,dtype=torch.long)
+    return inputs,targets
+
+def save_checkpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
+    out: str
+):
+    checkpoint = {
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'iteration': iteration
+    }
+    torch.save(
+        obj = checkpoint,
+        f = out
+    )
+
+
+def load_checkpoint(
+    src: str,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer
+):
+    checkpoint = torch.load(src)
+    model.load_state_dict(checkpoint['model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+
+    return checkpoint['iteration']
