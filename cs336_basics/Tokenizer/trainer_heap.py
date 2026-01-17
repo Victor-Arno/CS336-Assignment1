@@ -1,5 +1,5 @@
-"""BPE Trainer - Heap Optimized Method"""
-from collections import Counter
+"""BPE Trainer - Heap Optimized Method with Inverted Index"""
+from collections import Counter, defaultdict
 import heapq
 from tqdm import tqdm
 
@@ -7,29 +7,45 @@ from .base import BPETokenizerBase
 
 
 class BPETrainerHeap(BPETokenizerBase):
-    """BPE Trainer using heap optimization for finding max pair"""
+    """BPE Trainer using heap optimization and pair_to_words inverted index"""
 
-    def _build_heap(self, pair_counts: dict[tuple[bytes, bytes], int]) -> list:
-        """Build max heap from pair_counts (using negative values)"""
-        # Heap element format: (-freq, neg_pair, pair)
-        # neg_pair is used for tie-breaking by lexicographic order
+    def _build_initial_structures(
+        self, tokens_counter: Counter[tuple[bytes, ...]]
+    ) -> tuple[dict[tuple[bytes, bytes], int], dict[tuple[bytes, bytes], set[tuple[bytes, ...]]], list]:
+        """
+        Build initial pair_counts, pair_to_words index, and heap.
+
+        Returns:
+            pair_counts: pair -> frequency
+            pair_to_words: pair -> set of words containing this pair
+            heap: max heap for finding highest frequency pair
+        """
+        pair_counts: dict[tuple[bytes, bytes], int] = defaultdict(int)
+        pair_to_words: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]] = defaultdict(set)
+
+        for word, freq in tokens_counter.items():
+            word_len = len(word)
+            for i in range(word_len - 1):
+                pair = (word[i], word[i + 1])
+                pair_counts[pair] += freq
+                pair_to_words[pair].add(word)
+
+        # Build heap
         heap = []
         for pair, freq in pair_counts.items():
             neg_pair = self._negate_pair_for_heap(pair)
             heap.append((-freq, neg_pair, pair))
         heapq.heapify(heap)
-        return heap
+
+        return dict(pair_counts), pair_to_words, heap
 
     def _negate_pair_for_heap(self, pair: tuple[bytes, bytes]) -> tuple:
         """
         Convert pair to comparable form for heap ordering.
-
         For equal frequencies, we want lexicographically larger pairs first.
-        We negate each byte value and add a terminator to handle prefix comparisons.
         """
         def negate_bytes(b: bytes) -> tuple:
             return tuple(-x for x in b) + (1,)
-
         return (negate_bytes(pair[0]), negate_bytes(pair[1]))
 
     def _push_to_heap(self, heap: list, pair: tuple[bytes, bytes], freq: int):
@@ -46,28 +62,43 @@ class BPETrainerHeap(BPETokenizerBase):
             # Check if pair is still valid (frequency matches)
             if pair in pair_counts and pair_counts[pair] == freq:
                 return pair
-            # If frequency doesn't match or pair deleted, continue popping
         return None
 
-    def merge_tokens_with_heap(
+    def merge_tokens_with_index(
         self,
-        tokens_counter: Counter[tuple[bytes]],
+        tokens_counter: Counter[tuple[bytes, ...]],
         match1: bytes,
         match2: bytes,
         pair_counts: dict[tuple[bytes, bytes], int],
+        pair_to_words: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]],
         heap: list
-    ) -> Counter[tuple[bytes]]:
-        """Merge tokens and update heap"""
+    ) -> None:
+        """
+        Merge tokens using inverted index - only process words containing the target pair.
+        Updates tokens_counter, pair_counts, pair_to_words, and heap in-place.
+        """
         merged_token = match1 + match2
-        tokens_to_remove = []
-        tokens_to_add = []
+        target_pair = (match1, match2)
 
-        # Track all affected pairs and their changes
-        affected_pairs = set()
+        # Get words containing this pair (and remove from index)
+        words_to_process = pair_to_words.pop(target_pair, set())
 
-        for word, freq in list(tokens_counter.items()):
-            new_word = []
+        # Remove pair from counts
+        if target_pair in pair_counts:
+            del pair_counts[target_pair]
+
+        # Track pairs that need heap updates
+        affected_pairs: set[tuple[bytes, bytes]] = set()
+
+        for word in words_to_process:
+            if word not in tokens_counter:
+                continue
+
+            freq = tokens_counter[word]
             word_len = len(word)
+
+            # Build new word with merges
+            new_word = []
             i = 0
             has_merge = False
 
@@ -80,38 +111,47 @@ class BPETrainerHeap(BPETokenizerBase):
                     new_word.append(word[i])
                     i += 1
 
-            if has_merge:
-                new_word_tuple = tuple(new_word)
-                tokens_to_remove.append(word)
-                tokens_to_add.append((new_word_tuple, freq))
+            if not has_merge:
+                continue
 
-                # Update pair_counts: subtract old word's contribution
-                for j in range(word_len - 1):
-                    pair = (word[j], word[j + 1])
-                    affected_pairs.add(pair)
-                    pair_counts[pair] -= freq
-                    if pair_counts[pair] <= 0:
-                        del pair_counts[pair]
+            new_word_tuple = tuple(new_word)
 
-                # Update pair_counts: add new word's contribution
-                new_word_len = len(new_word_tuple)
-                for j in range(new_word_len - 1):
-                    pair = (new_word_tuple[j], new_word_tuple[j + 1])
-                    affected_pairs.add(pair)
-                    pair_counts[pair] += freq
-
-        # Update tokens_counter
-        for word in tokens_to_remove:
+            # Update tokens_counter
             del tokens_counter[word]
-        for word, freq in tokens_to_add:
-            tokens_counter[word] += freq
+            tokens_counter[new_word_tuple] += freq
 
-        # Push all affected pairs back to heap (if still exist)
+            # Update pair_counts and pair_to_words for old word's pairs
+            for j in range(word_len - 1):
+                old_pair = (word[j], word[j + 1])
+                if old_pair == target_pair:
+                    continue  # Already handled
+
+                # Decrease count
+                if old_pair in pair_counts:
+                    pair_counts[old_pair] -= freq
+                    affected_pairs.add(old_pair)
+                    if pair_counts[old_pair] <= 0:
+                        del pair_counts[old_pair]
+                        pair_to_words.pop(old_pair, None)
+                    else:
+                        # Remove old word from index
+                        if old_pair in pair_to_words:
+                            pair_to_words[old_pair].discard(word)
+
+            # Update pair_counts and pair_to_words for new word's pairs
+            new_word_len = len(new_word_tuple)
+            for j in range(new_word_len - 1):
+                new_pair = (new_word_tuple[j], new_word_tuple[j + 1])
+                if new_pair not in pair_counts:
+                    pair_counts[new_pair] = 0
+                pair_counts[new_pair] += freq
+                pair_to_words[new_pair].add(new_word_tuple)
+                affected_pairs.add(new_pair)
+
+        # Push affected pairs to heap
         for pair in affected_pairs:
-            if pair in pair_counts:
+            if pair in pair_counts and pair_counts[pair] > 0:
                 self._push_to_heap(heap, pair, pair_counts[pair])
-
-        return tokens_counter
 
     def train_BPE(
         self,
@@ -119,15 +159,16 @@ class BPETrainerHeap(BPETokenizerBase):
         vocab_size: int,
         special_tokens: list[str]
     ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-        """Train BPE tokenizer using heap optimization (for large-scale data)"""
+        """Train BPE tokenizer using heap optimization with inverted index"""
         next_index = self._initialize_vocab(special_tokens)
         tokens_counter = self._load_and_process_corpus(input_path, special_tokens)
 
         target_vocab_size = vocab_size
-        pair_counts = self.count_pair_frequencies(tokens_counter)
-        heap = self._build_heap(pair_counts)
 
-        with tqdm(total=target_vocab_size - len(self.vocab), desc="Training BPE (Heap)") as pbar:
+        # Build all structures at once
+        pair_counts, pair_to_words, heap = self._build_initial_structures(tokens_counter)
+
+        with tqdm(total=target_vocab_size - len(self.vocab), desc="Training BPE (Heap+Index)") as pbar:
             while len(self.vocab) < target_vocab_size:
                 if not pair_counts:
                     break
@@ -138,10 +179,13 @@ class BPETrainerHeap(BPETokenizerBase):
                     break
 
                 match1, match2 = best_pair
-                # Merge and update heap
-                tokens_counter = self.merge_tokens_with_heap(
-                    tokens_counter, match1, match2, pair_counts, heap
+
+                # Merge using inverted index
+                self.merge_tokens_with_index(
+                    tokens_counter, match1, match2,
+                    pair_counts, pair_to_words, heap
                 )
+
                 self.vocab[next_index] = match1 + match2
                 self.merges.append((match1, match2))
                 next_index += 1

@@ -36,7 +36,7 @@ from .trainer_linear import BPETrainerLinear
 from .trainer_heap import BPETrainerHeap
 
 # Default BPETokenizer uses linear method (for backward compatibility)
-BPETokenizer = BPETrainerLinear
+BPETokenizer = BPETrainerHeap
 
 __all__ = [
     # Parameters
