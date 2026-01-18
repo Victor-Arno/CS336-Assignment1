@@ -6,6 +6,8 @@ import time
 import psutil
 import os
 import numpy as np
+from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
 
 from cs336_basics.Tokenizer.BPE_tokenizer import Tokenizer
 
@@ -14,11 +16,49 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
+# Global tokenizer config (for multiprocessing)
+_tokenizer_config = {}
+
 
 def get_memory_usage_gb():
     """Get current memory usage in GB"""
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / (1024 ** 3)
+
+
+def init_worker(vocab, merges, special_tokens):
+    """Initialize tokenizer in worker process"""
+    global _worker_tokenizer
+    _worker_tokenizer = Tokenizer(vocab, merges, special_tokens)
+
+
+def tokenize_chunk(lines):
+    """Tokenize a chunk of lines (called in worker process)"""
+    global _worker_tokenizer
+    result = []
+    for line in lines:
+        result.extend(_worker_tokenizer.encode(line))
+    return result
+
+
+def load_tokenizer_config(vocab_path, merges_path, special_tokens):
+    """Load vocab and merges for tokenizer"""
+    # Load vocab
+    with open(vocab_path, "r") as vf:
+        vocab_data = json.load(vf)
+        vocab = {int(i): bytes(v, "latin1") for v, i in vocab_data.items()}
+
+    # Load merges with correct parsing (rsplit to handle space tokens)
+    merges = []
+    with open(merges_path, "r") as mf:
+        for line in mf:
+            line = line.rstrip('\n')
+            if line and not line.startswith("#"):
+                parts = line.rsplit(' ', 1)
+                if len(parts) == 2:
+                    merges.append((bytes(parts[0], "latin1"), bytes(parts[1], "latin1")))
+
+    return vocab, merges, special_tokens
 
 
 def preprocess_data():
@@ -49,23 +89,24 @@ def preprocess_data():
     print(f"Merges path: {merges_path}")
     print()
 
-    # Load tokenizer
+    # Load tokenizer config
     print("Loading tokenizer...")
     start_time = time.time()
-    tokenizer = Tokenizer.from_files(vocab_path, merges_path, special_tokens)
+    vocab, merges, special_tokens = load_tokenizer_config(vocab_path, merges_path, special_tokens)
     load_time = time.time() - start_time
     print(f"Tokenizer loaded in {load_time:.2f} seconds")
+    print(f"Vocab size: {len(vocab)}, Merges: {len(merges)}")
     print()
 
     # Process training data
     if os.path.exists(train_input_path):
-        process_file(tokenizer, train_input_path, train_output_path, "Training")
+        process_file_parallel(vocab, merges, special_tokens, train_input_path, train_output_path, "Training")
     else:
         print(f"Warning: Training file not found: {train_input_path}")
 
     # Process validation data
     if os.path.exists(val_input_path):
-        process_file(tokenizer, val_input_path, val_output_path, "Validation")
+        process_file_parallel(vocab, merges, special_tokens, val_input_path, val_output_path, "Validation")
     else:
         print(f"Warning: Validation file not found: {val_input_path}")
 
@@ -83,23 +124,34 @@ def preprocess_data():
         print(f"  Val:   {val_output_path} ({size_mb:.2f} MB)")
 
 
-def process_file(tokenizer, input_path, output_path, name):
-    """Tokenize a text file and save as binary"""
+def process_file_parallel(vocab, merges, special_tokens, input_path, output_path, name):
+    """Tokenize a text file using multiple processes"""
     print(f"Processing {name} data: {input_path}")
 
     start_time = time.time()
     start_memory = get_memory_usage_gb()
 
-    # Read and tokenize
+    # Read file
     print(f"  Reading file...")
     with open(input_path, "r", encoding="utf-8") as f:
-        text = f.read()
+        lines = f.readlines()
 
-    file_size_mb = len(text.encode("utf-8")) / (1024 * 1024)
+    file_size_mb = sum(len(line.encode("utf-8")) for line in lines) / (1024 * 1024)
     print(f"  File size: {file_size_mb:.2f} MB")
+    print(f"  Total lines: {len(lines):,}")
+
+    # Split lines into chunks for parallel processing
+    num_workers = cpu_count()
+    chunk_size = max(1, len(lines) // (num_workers * 10))  # More chunks for better progress tracking
+    chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
+    print(f"  Using {num_workers} workers, {len(chunks)} chunks")
     print(f"  Tokenizing...")
 
-    token_ids = tokenizer.encode(text)
+    # Process in parallel with progress bar
+    token_ids = []
+    with Pool(num_workers, initializer=init_worker, initargs=(vocab, merges, special_tokens)) as pool:
+        for result in tqdm(pool.imap(tokenize_chunk, chunks), total=len(chunks), desc=f"  {name}", unit="chunks"):
+            token_ids.extend(result)
 
     tokenize_time = time.time() - start_time
     print(f"  Tokenization time: {tokenize_time:.2f} seconds")

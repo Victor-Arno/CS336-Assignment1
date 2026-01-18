@@ -3,48 +3,94 @@
 For a full description of the assignment, see the assignment handout at
 [cs336_spring2025_assignment1_basics.pdf](./cs336_spring2025_assignment1_basics.pdf)
 
-If you see any issues with the assignment handout or code, please feel free to
-raise a GitHub issue or open a pull request with a fix.
-
 ## Setup
 
 ### Environment
+
 We manage our environments with `uv` to ensure reproducibility, portability, and ease of use.
 Install `uv` [here](https://github.com/astral-sh/uv) (recommended), or run `pip install uv`/`brew install uv`.
-We recommend reading a bit about managing projects in `uv` [here](https://docs.astral.sh/uv/guides/projects/#managing-dependencies) (you will not regret it!).
 
-You can now run any code in the repo using
-```sh
-uv run <python_file_path>
-```
-and the environment will be automatically solved and activated when necessary.
+### Run Unit Tests
 
-### Run unit tests
-
-
-```sh
+**Linux/macOS:**
+```bash
 uv run pytest
 ```
 
+**Windows (PowerShell):**
+```powershell
+$env:PYTHONUTF8=1; uv run pytest
+```
+
+> **Windows 注意事项:** 需要在 `tests/test_tokenizer.py` 中注释掉 `import resource`（第5行），因为 `resource` 模块仅支持 Unix 系统。
+
 Initially, all tests should fail with `NotImplementedError`s.
-To connect your implementation to the tests, complete the
-functions in [./tests/adapters.py](./tests/adapters.py).
+To connect your implementation to the tests, complete the functions in [./tests/adapters.py](./tests/adapters.py).
 
-### Download data
-Download the TinyStories data and a subsample of OpenWebText
+## Quick Start
 
-``` sh
-mkdir -p data
-cd data
+### 1. Download Data
 
+```bash
+mkdir -p data && cd data
+
+# TinyStories
 wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-train.txt
 wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-valid.txt
 
-wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_train.txt.gz
-gunzip owt_train.txt.gz
-wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_valid.txt.gz
-gunzip owt_valid.txt.gz
+# OpenWebText (optional)
+wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_train.txt.gz && gunzip owt_train.txt.gz
+wget https://huggingface.co/datasets/stanford-cs336/owt-sample/resolve/main/owt_valid.txt.gz && gunzip owt_valid.txt.gz
 
 cd ..
 ```
 
+### 2. Train BPE Tokenizer
+
+```bash
+uv run python demo/train_bpe_tinystories.py
+```
+
+Output: `data/tinystories_vocab.json`, `data/tinystories_merges.txt`
+
+### 3. Preprocess Data
+
+```bash
+uv run python demo/preprocess_tinystories.py
+```
+
+Output: `data/tinystories_train.bin`, `data/tinystories_val.bin`
+
+### 4. Train Model
+
+```bash
+cd cs336_basics && uv run python train.py \
+    --train_path ../data/tinystories_train.bin \
+    --val_path ../data/tinystories_val.bin \
+    --save_checkpoint_path ../checkpoints/tinystories.pt \
+    --log_dir ../runs/tinystories
+```
+
+Training time: ~2 hours on 2080Ti, ~30-40 min on H100
+
+### 5. Monitor Training
+
+```bash
+tensorboard --logdir runs/tinystories
+```
+
+## Project Structure
+
+```
+├── cs336_basics/
+│   ├── Tokenizer/       # BPE tokenizer implementation
+│   ├── Transform/       # Transformer modules (attention, FFN, etc.)
+│   └── train.py         # Training script
+├── demo/
+│   ├── train_bpe_tinystories.py    # Train BPE tokenizer
+│   └── preprocess_tinystories.py   # Preprocess data
+├── tests/
+│   ├── adapters.py      # Connect implementation to tests
+│   └── test_*.py        # Unit tests
+└── data/                # Training data (download required)
+```

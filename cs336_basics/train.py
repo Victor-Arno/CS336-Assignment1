@@ -1,4 +1,5 @@
 import argparse
+import os
 import torch
 import numpy as np
 import time
@@ -16,24 +17,24 @@ def parse_args():
 
     # 模型参数
     parser.add_argument("--vocab_size", type=int, default=10000, help="词表大小")
-    parser.add_argument("--d_model", type=int, default=768, help="模型的维度")
-    parser.add_argument("--num_layers", type=int, default=12, help="Transformer层数")
-    parser.add_argument("--num_heads", type=int, default=8, help="注意力头数")
-    parser.add_argument("--d_ff", type=int, default=3072, help="FFN层的隐藏层维度")
+    parser.add_argument("--d_model", type=int, default=512, help="模型的维度")
+    parser.add_argument("--num_layers", type=int, default=4, help="Transformer层数")
+    parser.add_argument("--num_heads", type=int, default=16, help="注意力头数")
+    parser.add_argument("--d_ff", type=int, default=1344, help="FFN层的隐藏层维度")
     parser.add_argument("--context_length", type=int, default=256, help="上下文长度")
     parser.add_argument("--theta", type=float, default=10000.0, help="RoPE的theta参数")
 
     # 训练参数
     parser.add_argument("--device", type=str, default="cuda", help="训练设备(cuda/cpu)")
-    parser.add_argument("--batch_size", type=int, default=8, help="训练批次大小")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="最大学习率")
-    parser.add_argument("--min_lr", type=float, default=1e-5, help="最小学习率")
-    parser.add_argument("--max_steps", type=int, default=10000, help="总训练步数")
-    parser.add_argument("--warmup_steps", type=int, default=100, help="学习率预热步数")
+    parser.add_argument("--batch_size", type=int, default=32, help="训练批次大小")
+    parser.add_argument("--learning_rate", type=float, default=3e-4, help="最大学习率")
+    parser.add_argument("--min_lr", type=float, default=3e-5, help="最小学习率")
+    parser.add_argument("--max_steps", type=int, default=40000, help="总训练步数")
+    parser.add_argument("--warmup_steps", type=int, default=1000, help="学习率预热步数")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="梯度裁剪阈值")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="权重衰减")
-    parser.add_argument("--log_interval", type=int, default=10, help="日志打印间隔(步)")
-    parser.add_argument("--val_interval", type=int, default=100, help="验证间隔(步)")
+    parser.add_argument("--weight_decay", type=float, default=0.1, help="权重衰减")
+    parser.add_argument("--log_interval", type=int, default=100, help="日志打印间隔(步)")
+    parser.add_argument("--val_interval", type=int, default=1000, help="验证间隔(步)")
 
     # 路径参数
     parser.add_argument("--train_path", type=str, default=None, help="训练数据路径")
@@ -115,7 +116,7 @@ def main():
     d_ff = args.d_ff
     context_length = args.context_length
     theta = args.theta
-    
+
     # 训练参数
     device = args.device
     batch_size = args.batch_size
@@ -127,7 +128,7 @@ def main():
     weight_decay = args.weight_decay
     log_interval = args.log_interval
     val_interval = args.val_interval
-    
+
     # 路径参数
     train_path = args.train_path
     val_path = args.val_path
@@ -141,7 +142,7 @@ def main():
     # 加载数据
     train_data = load_data(train_path)
     val_data = load_data(val_path) if val_path is not None else None
-   
+
     # 创建模型
     model = Mo.Transformer(
         vocab_size=vocab_size,
@@ -169,6 +170,9 @@ def main():
             model=model,
             optimizer=optimizer
         )
+
+    # 记录最佳验证损失
+    best_val_loss = float('inf')
 
     # 估算训练时间
     estimate_training_time(
@@ -240,28 +244,55 @@ def main():
             # TensorBoard 记录验证指标
             writer.add_scalar('Val/Loss', val_loss.item(), step)
 
-        # 保存checkpoint
-        if save_checkpoint_path is not None and step % val_interval == 0 and step > 0:
-            F.save_checkpoint(
-                model = model,
-                optimizer = optimizer,
-                iteration = step,
-                out = save_checkpoint_path
-            )
+            # 保存 checkpoint
+            if save_checkpoint_path is not None:
+                checkpoint_dir = os.path.dirname(save_checkpoint_path)
+                os.makedirs(checkpoint_dir, exist_ok=True)
+
+                # 保存带步数的 checkpoint（不覆盖）
+                base_name = os.path.basename(save_checkpoint_path)
+                name, ext = os.path.splitext(base_name)
+                step_checkpoint_path = os.path.join(checkpoint_dir, f"{name}_step{step}{ext}")
+                F.save_checkpoint(
+                    model=model,
+                    optimizer=optimizer,
+                    iteration=step,
+                    out=step_checkpoint_path
+                )
+                print(f"Saved checkpoint: {step_checkpoint_path}")
+
+                # 保存最佳模型
+                if val_loss.item() < best_val_loss:
+                    best_val_loss = val_loss.item()
+                    best_checkpoint_path = os.path.join(checkpoint_dir, f"{name}_best{ext}")
+                    F.save_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        iteration=step,
+                        out=best_checkpoint_path
+                    )
+                    print(f"New best model! Val Loss: {best_val_loss:.4f} -> {best_checkpoint_path}")
 
     # 保存训练最终权重
     if save_checkpoint_path is not None:
+        checkpoint_dir = os.path.dirname(save_checkpoint_path)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        base_name = os.path.basename(save_checkpoint_path)
+        name, ext = os.path.splitext(base_name)
+        final_checkpoint_path = os.path.join(checkpoint_dir, f"{name}_final{ext}")
         F.save_checkpoint(
             model = model,
             optimizer = optimizer,
             iteration = max_steps,
-            out = save_checkpoint_path
+            out = final_checkpoint_path
         )
 
     # 关闭 TensorBoard writer
     writer.close()
 
-    print(f"Training finished. Checkpoint saved to {save_checkpoint_path}")
+    print(f"Training finished.")
+    print(f"Best val loss: {best_val_loss:.4f}")
+    print(f"Checkpoints saved to {os.path.dirname(save_checkpoint_path)}")
 
 if __name__ == "__main__":
     main()
