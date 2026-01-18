@@ -22,7 +22,7 @@ uv run pytest
 $env:PYTHONUTF8=1; uv run pytest
 ```
 
-> **Windows 注意事项:** 需要在 `tests/test_tokenizer.py` 中注释掉 `import resource`（第5行），因为 `resource` 模块仅支持 Unix 系统。
+> **Windows 注意事项:** 需要在 `tests/test_tokenizer.py` 中注释掉 `import resource`，因为 `resource` 模块仅支持 Unix 系统。
 
 Initially, all tests should fail with `NotImplementedError`s.
 To connect your implementation to the tests, complete the functions in [./tests/adapters.py](./tests/adapters.py).
@@ -94,3 +94,4 @@ tensorboard --logdir runs/tinystories
 │   └── test_*.py        # Unit tests
 └── data/                # Training data (download required)
 ```
+
