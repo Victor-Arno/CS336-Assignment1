@@ -20,7 +20,7 @@ class Linear(nn.Module):
         super().__init__()
         weight = torch.empty((out_features, in_features), device=device, dtype=dtype)
         std = (2.0/(in_features + out_features))**0.5
-        nn.init.trunc_normal_(weight, mean = 0.0, std = std, a = -std, b = std)
+        nn.init.trunc_normal_(weight, mean = 0.0, std = std, a = -3*std, b = 3*std)
         # 初始化所有参数
         self.W = nn.Parameter(weight)
         self.device = device
@@ -56,8 +56,8 @@ class Embedding(nn.Module):
         """
         super().__init__()
         weights = torch.empty(num_embeddings,embedding_dim,device=device,dtype=dtype)
-        std = (2.0/(num_embeddings + embedding_dim))**0.5
-        nn.init.trunc_normal_(weights, mean = 0.0, std = std, a = -std, b = std)
+        # Embedding: N(μ=0, σ²=1) truncated at [-3, 3]
+        nn.init.trunc_normal_(weights, mean = 0.0, std = 1.0, a = -3, b = 3)
         # 嵌入矩阵的每一行就是一个词的嵌入向量, 比如一个词有64维向量, 嵌入矩阵取一行就是某个词的64维向量
         # self.weight = nn.Parameter(weights)
         self.weight = nn.Parameter(weights)
