@@ -18,11 +18,13 @@ uv run pytest
 ```
 
 **Windows (PowerShell):**
+
 ```powershell
-$env:PYTHONUTF8=1; uv run pytest
+$env:PYTHONUTF8=1
+uv run pytest
 ```
 
-> **Windows 注意事项:** 需要在 `tests/test_tokenizer.py` 中注释掉 `import resource`（第5行），因为 `resource` 模块仅支持 Unix 系统。
+> **Windows Notes:** You need to comment out `import resource` in `tests/test_tokenizer.py`, as the `resource` module is only supported on Unix systems.
 
 Initially, all tests should fail with `NotImplementedError`s.
 To connect your implementation to the tests, complete the functions in [./tests/adapters.py](./tests/adapters.py).
@@ -78,6 +80,33 @@ Training time: ~2 hours on 2080Ti, ~30-40 min on H100
 ```bash
 tensorboard --logdir runs/tinystories
 ```
+
+### 6. Generate Text
+
+```bash
+cd cs336_basics && uv run python generate.py \
+    --checkpoint ../checkpoints/tinystories_best.pt \
+    --prompt "Once upon a time," \
+    --temperature 0.8 --top_p 0.9
+```
+
+### 7. Interactive Chat
+
+```bash
+cd cs336_basics && uv run python chat.py
+```
+
+Example:
+```
+[temp=0.8, top_p=0.9, top_k=50, max=256]
+>>> Once upon a time,
+Once upon a time, there was a little girl named Lily...
+
+>>> /temp 0.7 /top_p 0.85 The brave knight
+The brave knight went on an adventure...
+```
+
+Commands: `/temp`, `/top_p`, `/top_k`, `/max`, `/settings`, `/help`, `/quit`
 
 ## Project Structure
 
