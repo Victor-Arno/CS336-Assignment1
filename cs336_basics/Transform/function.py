@@ -61,6 +61,11 @@ def lr_cos_scheduler(
     T_w,
     T_c
 ):
+    """
+        预热阶段: 学习率从0增加到a_max
+        余弦退火: 按余弦曲线从a_max平滑下降到a_min
+        恒定阶段: 学习率保持在a_min
+    """
     if t < T_w:
         a_t = t * a_max / T_w
     elif t > T_c:
